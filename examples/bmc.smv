@@ -1,0 +1,22 @@
+MODULE main
+VAR
+  x 5 10
+  y 0 15
+VAR_END
+
+ASSIGN
+  init x 0
+  init y 1
+ASSIGN_END
+
+TRANS
+    1 x +2
+    x 10 0
+    1 y -1
+    y 0 7
+TRANS_END
+
+LTLSPEC
+    y < 4
+    x = 7
+LTLSPEC_END
