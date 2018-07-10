@@ -125,11 +125,12 @@ EventVerifyResult Model::verifyEvent(const Event *event) {
     if (currentState == startState) {
         for (auto &z3Expr : startState->getZ3ExprList()) {
             this->slv.add(z3Expr);
-            logger->debug("添加起始节点的表达式%s", z3Expr);;
+//            std::cout << "z3Expr" << z3Expr;
+            logger->debug("添加起始节点的表达式%s", z3Expr.to_string().c_str());;
         }
         for (auto &spec : specZ3ExprVector) {
             this->slv.add(spec);
-            logger->debug("添加轨迹验证表达式%s", spec);
+            logger->debug("添加轨迹验证表达式%s", spec.to_string().c_str());
         }
         // 始终保留起始节点的表达式和SPEC表达式，后续添加的表达式在到达终止节点继续转移时弹出
         this->slv.push();
@@ -467,6 +468,7 @@ bool Model::isOperator(char c) {
 bool Model::compareOperator(const string &operator1, const string &operator2) {
     map<string, int> operatorPriority = {
             {"$",  0},
+//            {"=",  0},
             {"==", 1},
             {"!=", 1},
             {"<",  2},
@@ -490,6 +492,7 @@ bool Model::compareOperator(const string &operator1, const string &operator2) {
 }
 
 const Z3Expr Model::calcExpr(const Z3Expr &expr1, const string &currentOperator, const Z3Expr &expr2) {
+//    if (currentOperator == "=") return expr1 = expr2;
     if (currentOperator == "==") return expr1 == expr2;
     if (currentOperator == "!=") return expr1 != expr2;
     if (currentOperator == "<") return expr1 < expr2;
@@ -515,6 +518,7 @@ EventVerifyResultEnum Model::verify(const State *nextState, const map<string, st
     // 先把下一状态中的全部Z3表达式求与
     const vector<Z3Expr> &nextStateZ3Together = nextState->getZ3Together();
     if (!nextStateZ3Together.empty()) {
+        logger->debug("添加下一状态的表达式%s", nextStateZ3Together[0].to_string().c_str());
         slv.add(nextStateZ3Together[0]);
         slvNegative.add(!nextStateZ3Together[0]);
     }
@@ -533,21 +537,21 @@ EventVerifyResultEnum Model::verify(const State *nextState, const map<string, st
                             == this->ctx.int_val(varValue.second.c_str());
             slv.add(z3Expr);
             slvNegative.add(z3Expr);
-            logger->debug("添加事件上变量值构成的表达式%s", z3Expr);
+            logger->debug("添加事件上变量值构成的表达式%s", z3Expr.to_string().c_str());
         } else if (varType == "double") {
             Z3Expr z3Expr = this->ctx.real_const(
                     (varValue.first + std::to_string(nextStateNum)).c_str())
                             == this->ctx.real_val(varValue.second.c_str());
             slv.add(z3Expr);
             slvNegative.add(z3Expr);
-            logger->debug("添加事件上变量值构成的表达式%s", z3Expr);
+            logger->debug("添加事件上变量值构成的表达式%s", z3Expr.to_string().c_str());
         } else if (varType == "bool") {
             Z3Expr z3Expr = this->ctx.bool_const(
                     (varValue.first + std::to_string(nextStateNum)).c_str())
                             == this->ctx.bool_val(varValue.second == "true");
             slv.add(z3Expr);
             slvNegative.add(z3Expr);
-            logger->debug("添加事件上变量值构成的表达式%s", z3Expr);
+            logger->debug("添加事件上变量值构成的表达式%s", z3Expr.to_string().c_str());
         }
     }
 
