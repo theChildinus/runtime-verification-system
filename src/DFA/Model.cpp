@@ -3,11 +3,13 @@
 //
 
 #include <stack>
+#include <algorithm>
 #include <Event.h>
 #include <Model.h>
 using std::stack;
 
-Model::Model() : slv(ctx), slvNegative(ctx) {
+Model::Model() : slv(ctx), slvNegative(ctx),
+                 I(ctx.int_sort()), D(ctx.real_sort()), B(ctx.bool_sort()) {
 }
 
 Model::~Model() {
@@ -47,6 +49,7 @@ void Model::addState(int stateNum, const vector<string> &stateExprStrList) {
     newState->setStateNum(stateNum);
     for (auto &stateExprStr : stateExprStrList) {
         const Z3Expr z3Expr = this->extractZ3Expr(stateExprStr, std::to_string(stateNum));
+        logger->debug("节点表达式为:%s", z3Expr.to_string().c_str());
         newState->addZ3Expr(z3Expr);
     }
 
@@ -114,7 +117,8 @@ void Model::addTran(const string &tranName, int sourceStateNum, int destStateNum
 
 void Model::addSpec(const string &specStr) {
     // 生成Z3表达式添加进模型
-    const Z3Expr z3Expr = this->extractZ3Expr(specStr, "");
+    //const Z3Expr z3Expr = this->extractZ3Expr(specStr, "");
+    const Z3Expr z3Expr = this->extractZ3ExprForSpec(specStr);
     specZ3ExprVector.push_back(z3Expr);
 }
 
@@ -125,8 +129,7 @@ EventVerifyResult Model::verifyEvent(const Event *event) {
     if (currentState == startState) {
         for (auto &z3Expr : startState->getZ3ExprList()) {
             this->slv.add(z3Expr);
-//            std::cout << "z3Expr" << z3Expr;
-            logger->debug("添加起始节点的表达式%s", z3Expr.to_string().c_str());;
+            logger->debug("添加起始节点的表达式%s", z3Expr.to_string().c_str());
         }
         for (auto &spec : specZ3ExprVector) {
             this->slv.add(spec);
@@ -268,20 +271,110 @@ bool Model::initModel() {
     return true;
 }
 
+const Z3Expr Model::extractZ3ExprForSpec(const string &exprStr) {
+    stack<string> operatorStack;
+    stack<Z3Expr> exprStack;
+
+    operatorStack.push("$");
+    bool negative = false;
+    size_t i = 0;
+    while(i != exprStr.size()) {
+        size_t posRightBracket = exprStr.find(')', i);
+        string fragment = "", oper = "";
+        if (posRightBracket != string::npos) {
+            fragment = exprStr.substr(i, posRightBracket - i + 1);
+            i = posRightBracket + 1;
+        }
+        else {
+            fragment = exprStr.substr(i, exprStr.size() - i);
+        }
+        exprStack.push(extractZ3Expr(fragment, ""));
+
+        while (!isalpha(exprStr[i]) && !isdigit(exprStr[i])) {
+            i++;
+        }
+        if (posRightBracket != string::npos) {
+            oper = exprStr.substr(posRightBracket + 1, i - posRightBracket - 1);
+            oper.erase(std::remove_if(oper.begin(), oper.end(), isspace), oper.end());
+            if (oper.size() >= 3) {
+                size_t pos_sub = oper.find('-');
+                oper = oper.substr(0, pos_sub);
+                negative = true;
+            }
+            else if (oper.empty())
+                break;
+        } else {
+            if (negative) {
+                operatorStack.push("-");
+            }
+            break;
+        }
+        if (exprStack.size() > 1 && !compareOperator(oper, operatorStack.top())) {
+            Z3Expr expr2 = exprStack.top();
+            exprStack.pop();
+            Z3Expr expr1 = exprStack.top();
+            exprStack.pop();
+            string operatorTop = operatorStack.top();
+            operatorStack.pop();
+
+            exprStack.push(calcExpr(expr1, operatorTop, expr2));
+        }
+        operatorStack.push(oper);
+    }
+
+    while (operatorStack.size() > 1) {
+        string operatorTop = operatorStack.top() + "";
+        operatorStack.pop();
+
+        if (exprStack.size() < 2) {
+            logger->error("运算数或变量不足，表达式\"%s\"不合法", exprStr.c_str());
+            break;
+        }
+        Z3Expr expr2 = exprStack.top();
+        if (exprStack.size() == 2 && operatorTop == "-") {
+            expr2 = generateNumExp("-" + expr2.to_string());
+            operatorTop = operatorStack.top() + "";
+            operatorStack.pop();
+        }
+        exprStack.pop();
+        Z3Expr expr1 = exprStack.top();
+        exprStack.pop();
+
+        exprStack.push(calcExpr(expr1, operatorTop, expr2));
+    }
+    logger->debug("转为Z3: %s", exprStack.top().to_string().c_str());
+    return exprStack.top();
+}
+
 const Z3Expr Model::extractZ3Expr(const string &exprStr, const string &serialNum) {
     // 借用运算符栈和运算数栈实现表达式的解析
     stack<string> operatorStack;
     // expr栈用来记录中间表达式结果
     stack<Z3Expr> exprStack;
-
     // 先压入最低优先级运算符
     operatorStack.push("$");
-
     // 遍历字符串表达式
     string identifier;    // 记录标识符
     string currentType;    // 记录当前类型
+
+    bool isSpec = false;
+    if (serialNum.empty()) {
+        isSpec = true;
+    }
+    string funcName;
+    string funcNameNum;
+    string varTimeName = "";
+    for (auto iter : varsDecl) {
+        if (iter.second == "time") {
+            varTimeName = iter.first;
+            break;
+        }
+    }
+    Z3Expr funcTExpr = this->ctx.int_const(varTimeName.c_str());
+
     for (auto c : exprStr) {
         if (currentType.empty()) {
+            //logger->debug("### curentType: empty  %c", c);
             // 当前无类型，即可从任意符号开始新的标识符
             if (isalpha(c) || c == '_') {
                 // 当前开始一个新的变量
@@ -300,6 +393,7 @@ const Z3Expr Model::extractZ3Expr(const string &exprStr, const string &serialNum
                 logger->error("表达式中出现非法字符%c", c);
             }
         } else if (currentType == "var") {
+            //logger->debug("### curentType: var  %c", c);
             // 当前已处于变量状态
             if (isalnum(c) != 0 || c == '_') {
                 // 继续当前变量
@@ -314,7 +408,11 @@ const Z3Expr Model::extractZ3Expr(const string &exprStr, const string &serialNum
                 }
                 else {
                     // 根据变量名生成变量名expr
-                    exprStack.push(generateVarExp(identifier + serialNum));
+                    if (serialNum.empty() && varsDecl[identifier] != "time") {
+                        funcName = identifier;
+                    } else {
+                        exprStack.push(generateVarExp(identifier + serialNum, funcTExpr));
+                    }
                 }
                 identifier.clear();
 
@@ -323,11 +421,17 @@ const Z3Expr Model::extractZ3Expr(const string &exprStr, const string &serialNum
                 } else if (isOperator(c)) {
                     currentType = "operator";
                     identifier.push_back(c);
+                } else if (c == '(') {
+                    currentType = "operand";
+                    //isSpec = true;
+                } else if (c == ')') {
+                    currentType = "operator";
                 } else {
                     logger->error("表达式中出现不合法的标识符%s%c", identifier.c_str(), c);
                 }
             }
         } else if (currentType == "operand") {
+            //logger->debug("### curentType: operand  %c", c);
             // 当前已处于运算数状态
             if (isdigit(c) != 0 || c == '.') {
                 // 继续当前运算数
@@ -335,7 +439,11 @@ const Z3Expr Model::extractZ3Expr(const string &exprStr, const string &serialNum
             } else {
                 // 当前为其他字符则生成完整运算数
                 // 分析数的类型得到不同的expr
-                exprStack.push(generateNumExp(identifier));
+                if (!isSpec || c == ')') {
+                    exprStack.push(generateNumExp(identifier));
+                } else {
+                    funcNameNum = identifier;
+                }
                 identifier.clear();
 
                 if (isspace(c) != 0) {
@@ -343,11 +451,17 @@ const Z3Expr Model::extractZ3Expr(const string &exprStr, const string &serialNum
                 } else if (isOperator(c)) {
                     currentType = "operator";
                     identifier.push_back(c);
+                } else if (c == ',') {
+                    currentType = "";
+                } else if (c == ')') {
+                    currentType = "operator";
+                    //isSpec = false;
                 } else {
                     logger->error("表达式中出现不合法的标识符%s%c", identifier.c_str(), c);
                 }
             }
         } else if (currentType == "operator") {
+            //logger->debug("### curentType: operator  %c", c);
             // 当前已经处于运算符状态
             if (isOperator(c)) {
                 // 继续当前运算符
@@ -364,7 +478,6 @@ const Z3Expr Model::extractZ3Expr(const string &exprStr, const string &serialNum
                     exprStack.pop();
                     Z3Expr expr1 = exprStack.top();
                     exprStack.pop();
-
                     exprStack.push(calcExpr(expr1, operatorTop, expr2));
                 }
                 // 退出循环时表示当前运算符比栈顶运算符优先级高
@@ -379,6 +492,7 @@ const Z3Expr Model::extractZ3Expr(const string &exprStr, const string &serialNum
                     identifier.push_back(c);
                 } else if (isspace(c) != 0) {
                     currentType = "";
+                } else if (c == ')') {
                 } else {
                     logger->error("表达式中出现非法字符%c", c);
                 }
@@ -389,13 +503,12 @@ const Z3Expr Model::extractZ3Expr(const string &exprStr, const string &serialNum
     // 循环结束后需要手动添加结束符, 即循环退栈
     if (currentType == "var") {
         // 根据变量名生成变量名expr
-        exprStack.push(generateVarExp(identifier + serialNum));
         identifier.clear();
     } else if (currentType == "operand") {
         // 分析数的类型得到不同的expr
         exprStack.push(generateNumExp(identifier));
         identifier.clear();
-    } else if (currentType == "operator") {
+    } else if (currentType == "operator" && !isSpec) {
         logger->error("表达式\"%s\"以运算符结尾，非法！", exprStr.c_str());
     }
 
@@ -415,10 +528,18 @@ const Z3Expr Model::extractZ3Expr(const string &exprStr, const string &serialNum
         exprStack.push(calcExpr(expr1, operatorTop, expr2));
     }
 
+    if (isSpec) {
+        if (funcName.empty()) {
+            return exprStack.top();
+        }
+        Z3Expr e = generateVarExp(funcName + funcNameNum, exprStack.top());
+        exprStack.pop();
+        exprStack.push(e);
+    }
     return exprStack.top();
 }
 
-const Z3Expr Model::generateVarExp(const string &varName) {
+const Z3Expr Model::generateVarExp(const string &varName, const Z3Expr& TExpr) {
     auto digitIndex = varName.size();
     for (auto digitBegin = varName.rbegin(); digitBegin != varName.rend(); ++digitBegin, --digitIndex) {
         if (!isdigit(*digitBegin)) {
@@ -434,13 +555,13 @@ const Z3Expr Model::generateVarExp(const string &varName) {
         return this->ctx.bool_val(true);
     }
 
-    if (serialNum.empty() || states.find(std::stoi(serialNum)) == states.end()) {
-        logger->error("变量\"%s\"缺少有效的序号后缀", varName.c_str());
-        return this->ctx.bool_val(true);
-    }
+//    if (serialNum.empty() || states.find(std::stoi(serialNum)) == states.end()) {
+//        logger->error("变量\"%s\"缺少有效的序号后缀", varName.c_str());
+//        return this->ctx.bool_val(true);
+//    }
 
     string varType = varsDecl[varNameWithoutNum];
-    if (varType == "int") {
+    if (varType == "int" || varType == "time") {
         return this->ctx.int_const(varName.c_str());
     }
     else if (varType == "double") {
@@ -448,6 +569,18 @@ const Z3Expr Model::generateVarExp(const string &varName) {
     }
     else if (varType == "bool") {
         return this->ctx.bool_const(varName.c_str());
+    }
+    else if (varType == "int_function") {
+        func_decl f = function(varNameWithoutNum.c_str(), this->I, this->I, this->I);
+        return f(std::stoi(serialNum), TExpr);
+    }
+    else if (varType == "double_function") {
+        func_decl f = function(varNameWithoutNum.c_str(), this->I, this->I, this->D);
+        return f(std::stoi(serialNum), TExpr);
+    }
+    else if (varType == "bool_function") {
+        func_decl f = function(varNameWithoutNum.c_str(), this->I, this->I, this->B);
+        return f(std::stoi(serialNum), TExpr);
     }
     else {
         logger->error("不支持的变量类型，变量为%s", varName.c_str());
@@ -468,7 +601,6 @@ bool Model::isOperator(char c) {
 bool Model::compareOperator(const string &operator1, const string &operator2) {
     map<string, int> operatorPriority = {
             {"$",  0},
-//            {"=",  0},
             {"==", 1},
             {"!=", 1},
             {"<",  2},
@@ -478,7 +610,7 @@ bool Model::compareOperator(const string &operator1, const string &operator2) {
             {"+",  3},
             {"-",  3},
             {"*",  4},
-            {"/",  4}
+            {"/",  4},
     };
     if (operatorPriority.find(operator1) == operatorPriority.end()) {
         logger->error("运算符\"%s\"不支持", operator1.c_str());
@@ -492,7 +624,6 @@ bool Model::compareOperator(const string &operator1, const string &operator2) {
 }
 
 const Z3Expr Model::calcExpr(const Z3Expr &expr1, const string &currentOperator, const Z3Expr &expr2) {
-//    if (currentOperator == "=") return expr1 = expr2;
     if (currentOperator == "==") return expr1 == expr2;
     if (currentOperator == "!=") return expr1 != expr2;
     if (currentOperator == "<") return expr1 < expr2;

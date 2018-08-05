@@ -22,6 +22,8 @@ using std::map;
 using std::set;
 using z3::context;
 using z3::solver;
+using z3::func_decl;
+using z3::sort;
 using Z3Expr = z3::expr;
 
 class Model {
@@ -155,6 +157,12 @@ class Model {
      * Z3求解器的上下文
      */
     context ctx;
+
+    sort I;
+    sort D;
+    sort B;
+    vector<func_decl> funcDeclVectors;
+
     /**
      * Z3求解器
      */
@@ -172,13 +180,19 @@ class Model {
      * @return 转换成的Z3表达式
      */
     const Z3Expr extractZ3Expr(const string &exprStr, const string &serialNum);
+
+    /*
+     * @param exprStr 字符串表达式
+     * @return Z3表达式
+     */
+    const Z3Expr extractZ3ExprForSpec(const string &exprStr);
     /**
      * 根据变量名称查找变量类型并生成z3表达式
      * 变量名称末尾需要包含序号
      * @param 变量名
      * @return Z3表达式
      */
-    const Z3Expr generateVarExp(const string &varName);
+    const Z3Expr generateVarExp(const string &varName, const Z3Expr& TExpr);
     /**
      * 根据字符串表示的数字生成数字表达式
      * @param 数字字符串
