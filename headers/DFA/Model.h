@@ -161,7 +161,7 @@ class Model {
     sort I;
     sort D;
     sort B;
-    vector<func_decl> funcDeclVectors;
+    vector<Z3Expr> oldEventExpr;
 
     /**
      * Z3求解器

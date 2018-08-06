@@ -15,6 +15,7 @@ using std::set;
 
 class Event {
   public:
+    Event() = default;
     ~Event();
 
     /**
@@ -33,7 +34,6 @@ class Event {
     bool isImportant() const;
 
   private:
-    Event() = default;
     /**
      * 事件名称
      */

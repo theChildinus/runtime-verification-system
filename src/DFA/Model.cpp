@@ -9,7 +9,8 @@
 using std::stack;
 
 Model::Model() : slv(ctx), slvNegative(ctx),
-                 I(ctx.int_sort()), D(ctx.real_sort()), B(ctx.bool_sort()) {
+                 I(ctx.int_sort()), D(ctx.real_sort()), B(ctx.bool_sort()),
+                 oldEventExpr(1, ctx.bool_val(true)) {
 }
 
 Model::~Model() {
@@ -469,7 +470,7 @@ const Z3Expr Model::extractZ3Expr(const string &exprStr, const string &serialNum
             } else {
                 // 当前为其他字符则生成完整运算符
                 // 将当前运算符与栈顶相比较
-                while (!compareOperator(identifier, operatorStack.top())) {
+                while (exprStack.size() >= 2 && !compareOperator(identifier, operatorStack.top())) {
                     // 只要当前运算符比栈顶运算符优先级低就一直退两个表达式和一个运算符进行运算后压栈
                     const string operatorTop = operatorStack.top() + "";
                     operatorStack.pop();
@@ -655,35 +656,36 @@ EventVerifyResultEnum Model::verify(const State *nextState, const map<string, st
     }
 
     // 再将事件上的变量全部构造成Z3表达式添加进去
+    string varTimeName = "";
+    for (auto& varValue : varValueMap) {
+        if (varsDecl[varValue.first] == "time") {
+            varTimeName = varValue.first;
+            break;
+        }
+    }
+    vector<Z3Expr> tmpEventExpr;
     for (auto &varValue : varValueMap) {
-        string varType = varsDecl[varValue.first];
-        if (varType.empty()) {
-            logger->error("事件中出现未定义的变量%s", varValue.first.c_str());
-            continue;
+        string newEvent = varValue.first + "==" + varValue.second;
+        Z3Expr newEventExpr = extractZ3Expr(newEvent, std::to_string(nextStateNum));
+        if (varsDecl[varValue.first] != "time") {
+            string oldEvent = varValue.first +
+                              "(" + std::to_string(currentState->getStateNum()) + ", " + varTimeName +
+                              "-1) == " + varValue.second;
+            std::cout << "new-oldEvent: " << oldEvent << std::endl;
+            tmpEventExpr.push_back(extractZ3ExprForSpec(oldEvent));
+        } else {
+            newEventExpr = extractZ3Expr(newEvent, "");
         }
 
-        if (varType == "int") {
-            Z3Expr z3Expr = this->ctx.int_const(
-                    (varValue.first + std::to_string(nextStateNum)).c_str())
-                            == this->ctx.int_val(varValue.second.c_str());
-            slv.add(z3Expr);
-            slvNegative.add(z3Expr);
-            logger->debug("添加事件上变量值构成的表达式%s", z3Expr.to_string().c_str());
-        } else if (varType == "double") {
-            Z3Expr z3Expr = this->ctx.real_const(
-                    (varValue.first + std::to_string(nextStateNum)).c_str())
-                            == this->ctx.real_val(varValue.second.c_str());
-            slv.add(z3Expr);
-            slvNegative.add(z3Expr);
-            logger->debug("添加事件上变量值构成的表达式%s", z3Expr.to_string().c_str());
-        } else if (varType == "bool") {
-            Z3Expr z3Expr = this->ctx.bool_const(
-                    (varValue.first + std::to_string(nextStateNum)).c_str())
-                            == this->ctx.bool_val(varValue.second == "true");
-            slv.add(z3Expr);
-            slvNegative.add(z3Expr);
-            logger->debug("添加事件上变量值构成的表达式%s", z3Expr.to_string().c_str());
-        }
+        slv.add(newEventExpr);
+        slvNegative.add(newEventExpr);
+        logger->debug("添加新事件上变量值构成的表达式%s", newEventExpr.to_string().c_str());
+    }
+
+    for (auto oee : oldEventExpr) {
+        slv.add(oee);
+        slvNegative.add(oee);
+        logger->debug("添加旧事件上变量值构成的表达式%s", oee.to_string().c_str());
     }
 
     z3::check_result positiveResult = slv.check();
@@ -691,6 +693,9 @@ EventVerifyResultEnum Model::verify(const State *nextState, const map<string, st
 
     slv.pop();
     slvNegative.pop();
+
+    oldEventExpr.clear();
+    oldEventExpr = tmpEventExpr;
 
     if (positiveResult == z3::unsat) {
         logger->info("尝试转移到节点%d失败", nextStateNum);
