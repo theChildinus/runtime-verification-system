@@ -671,7 +671,7 @@ EventVerifyResultEnum Model::verify(const State *nextState, const map<string, st
             string oldEvent = varValue.first +
                               "(" + std::to_string(currentState->getStateNum()) + ", " + varTimeName +
                               "-1) == " + varValue.second;
-            std::cout << "new-oldEvent: " << oldEvent << std::endl;
+            // std::cout << "new-oldEvent: " << oldEvent << std::endl;
             tmpEventExpr.push_back(extractZ3ExprForSpec(oldEvent));
         } else {
             newEventExpr = extractZ3Expr(newEvent, "");
@@ -694,9 +694,6 @@ EventVerifyResultEnum Model::verify(const State *nextState, const map<string, st
     slv.pop();
     slvNegative.pop();
 
-    oldEventExpr.clear();
-    oldEventExpr = tmpEventExpr;
-
     if (positiveResult == z3::unsat) {
         logger->info("尝试转移到节点%d失败", nextStateNum);
         currentFailedStates.insert(nextState);
@@ -709,6 +706,8 @@ EventVerifyResultEnum Model::verify(const State *nextState, const map<string, st
     }
     else  {
         logger->info("尝试转移到节点%d成功", nextStateNum);
+        oldEventExpr.clear();
+        oldEventExpr = tmpEventExpr;
         return EventVerifyResultEnum::pass;
     }
 }
